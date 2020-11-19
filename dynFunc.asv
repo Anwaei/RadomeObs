@@ -1,0 +1,5 @@
+function x_next = dynFunc(x,u)
+global V_M T
+x_next = zeros(size(x));
+x_next(1) = x(1) - T/x(2)*V_M*sin(x)
+end
