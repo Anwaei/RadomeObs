@@ -25,4 +25,12 @@ end
 figure(2)
 plot(t,ac,t,am);
 legend('ac','am')
+
+K = 10000;
+x = zeros(2,K);
+L = [1,0.1;0.1,1];
+for k = 1:K
+    x(:,k) = mvnrnd(zeros(2,1),L);
+end
+plot(x(1,:),x(2,:),'.')
     

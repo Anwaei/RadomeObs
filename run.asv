@@ -5,8 +5,8 @@
 % measurement: lambda_ME = (1+rho_theta)*lambda - rho_theta*gamma_M
 % other states: X_M Y_M V_Mx V_My X_T Y_T
 % guidance law: PNG: A_cmd = N*lambda_dot = -N/R*V_M*sin(gamma_M-lambda)
-% discreted dynamic function: x(k+1) = f(x(k),u(k))
-% discreted measurement function: z(k) = h(x(k))
+% discreted dynamic function: x(k+1) = f(x(k),u(k)) Jacobian function: Fx(x,u)
+% discreted measurement function: z(k) = h(x(k)) Jacobian function: Hx(x)
 % discreted pilot: A_M(k+1) = g(A_M(k),A_cmd(k))
 % Stationary target
 % Constant velocity
@@ -14,25 +14,119 @@
 % ----------------------------------------
 
 clear
-% ------------ Initial states ------------
+global V_M T tau
+% ------------ Initial states -------------
 X_M0 = 0; Y_M0 = 0; V_Mx0 = 500; V_My0 = 0;
 gamma_M0 = 0; X_T = 10^4; Y_T = 10^3;
-rho_theta = 0.025;  % radome slope, assumed linear
+rho_theta0 = 0.025;  % radome slope, assumed linear
+V_M = norm([V_Mx0, V_My0]);
 
 lambda0 = atan(Y_T/X_T);
 R0 = norm([X_T, Y_T]);
 
-tao = 0.1; N = 4;
+tau = 0.1; N = 4;
 x0 = [lambda0, R0, gamma_M0, rho_theta0]'; D = numel(x0);
 
-% ------------ Filter setting ------------
-dt = 0.05; t = 0:dt:25;
+% ------------ Filter settings ------------
+dt = 0.01; t = 0:dt:25; T = dt;
 num_steps = numel(t);
-x_true = zeros(D,num_steps); x_true(1) = x0;
-m = zeros(D,num_steps);
-P = zeros(D,D,num_steps);
+x_true = zeros(D,num_steps); x_true(:,1) = x0;  % Ture states
+z = zeros(1,num_steps);  % Observations
+ucmd = zeros(1,num_steps);  % Guidance input
+u = zeros(1,num_steps);  % Control input
+m = zeros(D,num_steps);  % Estimated means
+P = zeros(D,D,num_steps);  % Estimated covariances
 m(:,1) = [deg2rad(7.7106) 12050 deg2rad(2) 0]';  % Initial estimated mean
 P(:,:,1) = diag([(deg2rad(1))^2 1000^2 (deg2rad(1))^2 1^2]);  % Initial estimated covariance
-Q = zeros(D,D,num_steps);
+Q = zeros(D,D,num_steps);  % Process noise
+R = zeros(1,num_steps);  % Observation noise
 for k = 1:num_steps
-    Q(:,:,k) = 
+    Q(:,:,k) = diag([(deg2rad(0.01))^2 10^2 (deg2rad(0.01))^2 0.001^2]);
+    R(k) = (deg2rad(0.01))^2;
+end
+X_M = zeros(1,num_steps); X_M(1) = X_M0;
+Y_M = zeros(1,num_steps); Y_M(1) = Y_M0;
+V_Mx = zeros(1,num_steps); V_Mx(1) = V_Mx0;
+V_My = zeros(1,num_steps); V_My(1) = V_My0;
+
+% ------------ Model functions ------------
+f = @dynFunc; h = @measFunc;
+Fx = @dynJacob; Hx = @measJacob;
+
+%% Simulation
+for k = 1:num_steps
+    % ----------- Filtering -----------
+    if k > 1
+        % ---------    EKF    ---------
+        % Predict
+        m_predict = f(m(:,k-1),u(:,k-1));
+        P_predict = Fx(m(:,k-1),u(:,k-1))*P(:,:,k-1)*Fx(m(:,k-1),u(:,k-1))' + Q(:,:,k-1);
+        % Updating
+        noise_obs = mvnrnd(0,R(k));
+        z_k = h(x_true(:,k)) + noise_obs;  % Current observation
+        v_k = z_k - h(m_predict);  % Innovation
+        S_k = Hx(m_predict) * P_predict * Hx(m_predict)' + R(k);
+        K_k = P_predict * Hx(m_predict)' / S_k;  % Kalman gain
+        m_updated = m_predict + K_k*v_k;
+        P_updated = P_predict - K_k*S_k*K_k';
+        
+        z(k) = z_k;
+        m(:,k) = m_updated;
+        P(:,:,k) = P_updated;
+    end
+    
+    if abs(x_true(2,k)) < 2
+        break;
+    end
+    V_Mx(k) = V_M*cos(x_true(3,k));
+    V_My(k) = V_M*sin(x_true(3,k));
+    
+    % ---------- Propogating ----------
+    ucmd(k) = -N*V_M/x_true(2,k)*V_M*sin(x_true(3,k)-x_true(1,k));  % Proportional guidance
+    if k < num_steps
+        u(:,k+1) = (tau-T)/tau * u(:,k) + T/tau*ucmd(:,k);  % Pilot input, using forward difference
+        noise_pro = mvnrnd(zeros(4,1),Q(:,:,k))';
+        x_true(:,k+1) = f(x_true(:,k),u(:,k)) + noise_pro;  % State propagation
+        X_M(k+1) = X_M(k) + V_Mx(k)*dt;
+        Y_M(k+1) = Y_M(k) + V_My(k)*dt;
+    end
+    
+end
+
+%% Results
+num_steps_end = k;
+x_true = x_true(:,1:num_steps_end); 
+X_M = X_M(:,1:num_steps_end); Y_M = Y_M(:,1:num_steps_end);
+m = m(:,1:num_steps_end); P = P(:,:,1:num_steps_end);
+t = t(:,1:num_steps_end); z = z(:,1:num_steps_end);
+u = u(:,1:num_steps_end); ucmd = ucmd(:,1:num_steps_end); 
+std = zeros(D, num_steps_end);
+for k = 1:num_steps_end
+    std(:,k) = sqrt(diag(P(:,:,k)));
+end
+figure(1); hold on
+plot(t,x_true(1,:),t,m(1,:));
+hi = patch([ns, fliplr(ns)],[mpost-2*spost; flipud(mpost+2*spost)], 1, 'FaceColor', [0.9,0.9,1], 'EdgeColor', 'none'); % This is the grey area in the plot.
+% patch([ns, fliplr(ns)],[mpost-sPost; flipud(mPost+sPost)], 1, 'FaceColor', [1,1,1]*0.8, 'EdgeColor', 'none'); % This is the grey area in the plot.
+set(hi,'handlevisibility','off');
+legend('true lambda', 'estimated lambda')
+figure(2); hold on
+plot(t,x_true(2,:),t,m(2,:));
+legend('true R', 'estimated R')
+figure(3); hold on
+plot(t,x_true(3,:),t,m(3,:));
+legend('true gammaM', 'estimated gammaM')
+figure(4); hold on
+plot(t,x_true(4,:),t,m(4,:));
+legend('true rho', 'estimated rho')
+figure(5); hold on
+plot(t,z);
+title('observations')
+figure(6); hold on
+plot(t,u,t,ucmd);
+legend('input pilot', 'input guidance')
+figure(7); hold on
+plot(X_M,Y_M);
+plot(X_T,Y_T,'o');
+xlabel('x'); ylabel('y');
+
