@@ -28,8 +28,10 @@ R0 = norm([X_T, Y_T]);
 tau = 0.1; N = 4;
 x0 = [lambda0, R0, gamma_M0, rho_theta0]'; D = numel(x0);
 
+tol = 50;  % Min distance when guidance ends
+
 % ------------ Filter settings ------------
-dt = 0.01; t = 0:dt:25; T = dt;
+dt = 0.05; t = 0:dt:25; T = dt;
 num_steps = numel(t);
 x_true = zeros(D,num_steps); x_true(:,1) = x0;  % Ture states
 z = zeros(1,num_steps);  % Observations
@@ -52,6 +54,9 @@ V_My = zeros(1,num_steps); V_My(1) = V_My0;
 lambda_dot = zeros(1,num_steps);
 gamma_dot = zeros(1,num_steps);
 u_int = zeros(1,num_steps);
+
+% For test
+error_R = zeros(1,num_steps);
 
 % ------------ Model functions ------------
 f = @dynFunc; h = @measFunc;
@@ -79,7 +84,8 @@ for k = 1:num_steps
         P(:,:,k) = P_updated;
     end
     
-    if abs(x_true(2,k)) < 10
+%     if abs(x_true(2,k)) < tol
+    if norm([X_M(k)-X_T, Y_M(k)-Y_T]) < tol
         break;
     end
     V_Mx(k) = V_M*cos(x_true(3,k));
@@ -91,13 +97,15 @@ for k = 1:num_steps
     if k < num_steps 
         u(:,k+1) = (tau-T)/tau * u(:,k) + T/tau*ucmd(:,k);  % Pilot input, using forward difference
         u_int(k+1) = u_int(k) + abs(u(:,k+1))*dt;
-        noise_pro = mvnrnd(zeros(4,1),Q(:,:,k))';
+        noise_pro = mvnrnd(zeros(4,1),Q(:,:,k))';        
 %         x_true(:,k+1) = f(x_true(:,k),u(:,k)) + noise_pro;  % State propagation
         x_true(:,k+1) = f(x_true(:,k),u(:,k));
         X_M(k+1) = X_M(k) + V_Mx(k)*dt;
         Y_M(k+1) = Y_M(k) + V_My(k)*dt;
     end
     gamma_dot(k) = u(:,k)/V_M;
+    
+    error_R(k) = norm([X_M(k)-X_T, Y_M(k)-Y_T]) - x_true(2,k);
     
 end
 
@@ -114,6 +122,7 @@ lambda_dot = rad2deg(lambda_dot);
 gamma_dot = gamma_dot(:,1:num_steps_end);
 gamma_dot = rad2deg(gamma_dot);
 sigma_dot = gamma_dot - lambda_dot;
+error_R = error_R(:,1:num_steps_end);
 std = zeros(D, num_steps_end);
 for k = 1:num_steps_end
     std(:,k) = sqrt(diag(P(:,:,k)));
@@ -148,7 +157,7 @@ for d = 1:D
     xlabel('t');
 end
 figure(D+1); hold on
-plot(t,z);
+plot(t,z); xlabel('t');
 title('observations')
 figure(D+2); hold on
 plot(t,u,t,ucmd);
@@ -157,6 +166,7 @@ figure(D+3); hold on
 plot(X_M,Y_M);
 plot(X_T,Y_T,'o');
 xlabel('x'); ylabel('y');
+legend('missile','target')
 title('trajectory')
 figure(D+4); hold on
 plot(t,lambda_dot);
