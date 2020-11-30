@@ -50,6 +50,8 @@ Y_M = zeros(1,num_steps); Y_M(1) = Y_M0;
 V_Mx = zeros(1,num_steps); V_Mx(1) = V_Mx0;
 V_My = zeros(1,num_steps); V_My(1) = V_My0;
 lambda_dot = zeros(1,num_steps);
+gamma_dot = zeros(1,num_steps);
+u_int = zeros(1,num_steps);
 
 % ------------ Model functions ------------
 f = @dynFunc; h = @measFunc;
@@ -84,15 +86,18 @@ for k = 1:num_steps
     V_My(k) = V_M*sin(x_true(3,k));
     
     % ---------- Propogating ----------
-    lambda_dot(k) = V_M/x_true(2,k)*sin(x_true(3,k)-x_true(1,k));
-    ucmd(k) = -N*V_M*lambda_dot(k);  % Proportional guidance
-    if k < num_steps
+    lambda_dot(k) = -V_M/x_true(2,k)*sin(x_true(3,k)-x_true(1,k));
+    ucmd(k) = N*V_M*lambda_dot(k);  % Proportional guidance
+    if k < num_steps 
         u(:,k+1) = (tau-T)/tau * u(:,k) + T/tau*ucmd(:,k);  % Pilot input, using forward difference
+        u_int(k+1) = u_int(k) + abs(u(:,k+1))*dt;
         noise_pro = mvnrnd(zeros(4,1),Q(:,:,k))';
-        x_true(:,k+1) = f(x_true(:,k),u(:,k)) + noise_pro;  % State propagation
+%         x_true(:,k+1) = f(x_true(:,k),u(:,k)) + noise_pro;  % State propagation
+        x_true(:,k+1) = f(x_true(:,k),u(:,k));
         X_M(k+1) = X_M(k) + V_Mx(k)*dt;
         Y_M(k+1) = Y_M(k) + V_My(k)*dt;
     end
+    gamma_dot(k) = u(:,k)/V_M;
     
 end
 
@@ -103,10 +108,23 @@ X_M = X_M(:,1:num_steps_end); Y_M = Y_M(:,1:num_steps_end);
 m = m(:,1:num_steps_end); P = P(:,:,1:num_steps_end);
 t = t(:,1:num_steps_end); z = z(:,1:num_steps_end);
 u = u(:,1:num_steps_end); ucmd = ucmd(:,1:num_steps_end); 
+u_int = u_int(:,1:num_steps_end);
 lambda_dot = lambda_dot(:,1:num_steps_end);
+lambda_dot = rad2deg(lambda_dot);
+gamma_dot = gamma_dot(:,1:num_steps_end);
+gamma_dot = rad2deg(gamma_dot);
+sigma_dot = gamma_dot - lambda_dot;
 std = zeros(D, num_steps_end);
 for k = 1:num_steps_end
     std(:,k) = sqrt(diag(P(:,:,k)));
+end
+
+zem = zeros(1,num_steps_end); t_end = t(end);  % Zero Effort Distance
+for k = 1:num_steps_end
+    t_go = t_end - t(k);
+    X_end = X_M(k) + V_Mx(k)*t_go;
+    Y_end = Y_M(k) + V_My(k)*t_go;
+    zem(k) = sqrt((X_end-X_T)^2 + (Y_end-Y_T)^2);
 end
 
 x_true_deg = x_true;
@@ -143,4 +161,30 @@ title('trajectory')
 figure(D+4); hold on
 plot(t,lambda_dot);
 title('lambda dot');
+
+%% Figures in the paper
+D1 = D+4;
+figure(D1+1); hold on
+plot(X_M,Y_M);
+plot(X_T,Y_T,'o');
+xlabel('x'); ylabel('y');
+title('Missile Trajectory')
+figure(D1+2); hold on
+plot(t,lambda_dot);
+title('Line-of-Sight Angle Rate');
+figure(D1+3); hold on
+plot(t,gamma_dot);
+title('Missile Flight Path Angle Rate');
+figure(D1+4); hold on
+plot(t,sigma_dot);
+title('Lead Angle Rate');
+figure(D1+5); hold on
+plot(t,zem);
+title('Zero-Effort Miss Distance');
+figure(D1+6); hold on
+plot(t,u);
+title('Missile Maneuver Acceleration');
+figure(D1+7); hold on
+plot(t,u_int);
+title('Missile Maneuver Acceleration Integral');
 
